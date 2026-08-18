@@ -1,0 +1,57 @@
+{
+    "project": "Heart Failure Survival Prediction using SHAP + TabPFN V2",
+    "model_version": "TabPFN V2",
+    "inference_backend": "tabpfn_client",
+    "target": "DEATH_EVENT",
+    "excluded_features": [
+        "time"
+    ],
+    "selected_features": [
+        "age",
+        "anaemia",
+        "creatinine_phosphokinase",
+        "diabetes",
+        "ejection_fraction",
+        "high_blood_pressure",
+        "platelets",
+        "serum_creatinine",
+        "serum_sodium",
+        "sex",
+        "smoking"
+    ],
+    "feature_count": 11,
+    "internal_class_balancing": true,
+    "experiment_device": "cpu",
+    "deployment_device": "cpu",
+    "n_estimators": 4,
+    "fit_mode": "fit_preprocessors",
+    "shap_ratio": 1.0,
+    "selection_metric": "G-Mean",
+    "tie_breakers": [
+        "AUC",
+        "MCC",
+        "F1",
+        "Accuracy"
+    ],
+    "evaluation_method": "5 repeated stratified train-test evaluations",
+    "n_repetitions": 5,
+    "split_variants": [
+        "70:30",
+        "80:20",
+        "90:10"
+    ],
+    "no_validation_set": true,
+    "smote": false,
+    "softmax_temperature": false,
+    "average_before_softmax": false,
+    "final_mean_metrics": {
+        "accuracy": 0.7666666666666666,
+        "precision": 0.6111538461538462,
+        "sensitivity": 0.8400000000000001,
+        "specificity": 0.7300000000000001,
+        "f1": 0.7055615688659167,
+        "gmean": 0.781392724021968,
+        "auc": 0.8150000000000001,
+        "mcc": 0.5418970905615179
+    }
+}
