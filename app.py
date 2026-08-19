@@ -443,10 +443,13 @@ if predict_clicked:
 
 st.markdown(
     """
-    <div class="disclaimer">
-        Aplikasi ini merupakan prototipe penelitian untuk prediksi berbasis
-        data dan bukan pengganti diagnosis, keputusan klinis, atau konsultasi
-        tenaga kesehatan.
+    <div class="disclaimer" style="background-color: #fff3cd; border-left: 5px solid #ff6b6b; border-radius: 5px; padding: 20px; margin-top: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+        <h3 style="color: #d32f2f; margin-top: 0;">⚠️ DISCLAIMER PENTING</h3>
+        <p style="color: #333; font-weight: 500; line-height: 1.6;">
+            Aplikasi ini merupakan <strong>prototipe penelitian</strong> untuk prediksi berbasis
+            data dan <strong>BUKAN pengganti</strong> diagnosis, keputusan klinis, atau konsultasi
+            tenaga kesehatan.
+        </p>
     </div>
     """,
     unsafe_allow_html=True,
