@@ -412,12 +412,12 @@ if predict_clicked:
                 <div style="font-size:1.45rem; margin-top:0.35rem;">
                     <span class="{prediction_class}">{prediction_text}</span>
                 </div>
-                <div class="probability-label">Dengan Probabilitas Model:</div>
-                <div>
+                <div class="probability-label" style="color: black;">Dengan Probabilitas Model:</div>
+                <div style="color: black;">
                     Probabilitas Hidup:
                     <span class="survival"><b>{survival_prob:.0%}</b></span>
                 </div>
-                <div>
+                <div style="color: black;">
                     Probabilitas Meninggal:
                     <span class="death"><b>{death_prob:.0%}</b></span>
                 </div>
