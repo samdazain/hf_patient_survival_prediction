@@ -67,7 +67,7 @@ def build_fitted_model():
     configure_tabpfn_token()
 
     from tabpfn_client import TabPFNClassifier
-    from tabpfn_client.api_models import ModelVersion
+    from tabpfn.constants import ModelVersion
 
     model = TabPFNClassifier.create_default_for_version(
         ModelVersion.V2,
