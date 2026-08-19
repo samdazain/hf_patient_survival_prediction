@@ -10,7 +10,6 @@ APP_DIR = Path(__file__).resolve().parent
 CONFIG_PATH = APP_DIR / "model_config.json"
 FEATURES_PATH = APP_DIR / "selected_features.json"
 DATA_PATH = APP_DIR / "deployment_training_data.csv"
-SHAP_PATH = APP_DIR / "shap_global_importance.png"
 
 st.set_page_config(
     page_title="Prediksi Kelangsungan Hidup Pasien Gagal Jantung",
@@ -334,7 +333,7 @@ st.markdown(
 
 st.markdown(
     '<div class="main-title">Prediksi Kelangsungan Hidup Pasien Gagal Jantung<br>'
-    'Model SHAP + TabPFN V2</div>',
+    'Model TabPFN V2</div>',
     unsafe_allow_html=True,
 )
 
@@ -413,15 +412,13 @@ if predict_clicked:
                 <div style="font-size:1.45rem; margin-top:0.35rem;">
                     <span class="{prediction_class}">{prediction_text}</span>
                 </div>
-                <div class="probability-label">
-                    <span style="color: black;">Dengan Probabilitas Model:</span>
-                </div>
+                <div class="probability-label">Dengan Probabilitas Model:</div>
                 <div>
-                    <span style="color: black;">Probabilitas Hidup:</span>
+                    Probabilitas Hidup:
                     <span class="survival"><b>{survival_prob:.0%}</b></span>
                 </div>
                 <div>
-                    <span style="color: black;">Probabilitas Meninggal:</span>
+                    Probabilitas Meninggal:
                     <span class="death"><b>{death_prob:.0%}</b></span>
                 </div>
             </div>
@@ -443,29 +440,6 @@ if predict_clicked:
         )
         st.exception(exc)
 
-st.markdown(
-    '<div class="section-title">Global SHAP Feature Importance</div>',
-    unsafe_allow_html=True,
-)
-
-if SHAP_PATH.exists():
-    st.image(
-        str(SHAP_PATH),
-        caption="Mean Absolute SHAP Value",
-        use_container_width=True,
-    )
-else:
-    st.warning("File shap_global_importance.png tidak ditemukan.")
-
-st.markdown(
-    """
-    <div class="small-note">
-        Interpretasi global menunjukkan kontribusi relatif fitur terhadap
-        prediksi model berdasarkan Mean Absolute SHAP Value.
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
 
 st.markdown(
     """
