@@ -50,39 +50,18 @@ TARGET = CONFIG["target"]
 # ---------------------------------------------------------------------------
 
 def configure_tabpfn_token():
-    """Configure TabPFN authentication with a writable cache path.
-
-    tabpfn-client stores the authenticated token in a file under the installed
-    package by default. Hugging Face Spaces may mount site-packages as
-    read-only, so the token cache is redirected to /tmp.
-    """
+    """Use a Hugging Face Space Secret if available."""
     token = (
         os.getenv("TABPFN_TOKEN")
         or os.getenv("PRIORLABS_API_KEY")
         or os.getenv("TABPFN_API_KEY")
     )
-
-    if not token:
-        raise RuntimeError(
-            "TABPFN_TOKEN belum ditemukan. Tambahkan TABPFN_TOKEN "
-            "sebagai Secret pada Hugging Face Space."
-        )
-
-    import tabpfn_client
-    from tabpfn_client.service_wrapper import UserAuthenticationClient
-
-    # tabpfn-client currently defaults its token cache to
-    # <site-packages>/tabpfn_client/.tabpfn, which can be read-only on
-    # Hugging Face Spaces. Redirect only the token cache to a writable path.
-    writable_cache = Path(
-        os.getenv("TABPFN_CLIENT_CACHE_DIR", "/tmp/tabpfn_client")
-    )
-    writable_cache.mkdir(parents=True, exist_ok=True)
-    UserAuthenticationClient.CACHED_TOKEN_FILE = writable_cache / "config"
-
-    # Authorize the current process and persist the token to the writable path.
-    tabpfn_client.set_access_token(token)
-
+    if token:
+        try:
+            import tabpfn_client
+            tabpfn_client.set_access_token(token)
+        except Exception:
+            pass
 
 @st.cache_resource(show_spinner=False)
 def build_fitted_model():
