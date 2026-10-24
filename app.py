@@ -1,116 +1,136 @@
-import json
-import os
+"""
+Prediksi Kelangsungan Hidup Pasien Gagal Jantung
+TabPFN V2 (paket lokal `tabpfn`)
+
+Dua halaman:
+  1. Fitur terpilih (3 fitur)  -> halaman utama
+  2. Seluruh fitur (11 fitur)  -> sub menu di sidebar
+
+Pengaturan model diambil dari notebook HF_TabPFNV2_SHAP_TopK_Sequential.ipynb
+(lihat blok KONFIGURASI). SHAP hanya dipakai di notebook untuk memilih fitur.
+"""
+
+import warnings
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 import streamlit as st
 
+warnings.filterwarnings("ignore")
+
 APP_DIR = Path(__file__).resolve().parent
-CONFIG_PATH = APP_DIR / "model_config.json"
-FEATURES_PATH = APP_DIR / "selected_features.json"
 DATA_PATH = APP_DIR / "deployment_training_data.csv"
 
 st.set_page_config(
     page_title="Prediksi Kelangsungan Hidup Pasien Gagal Jantung",
     page_icon="❤️",
     layout="wide",
-    initial_sidebar_state="collapsed",
+    initial_sidebar_state="expanded",
 )
 
 # ---------------------------------------------------------------------------
-# Configuration and data
+# KONFIGURASI (bersumber dari notebook)
 # ---------------------------------------------------------------------------
 
-@st.cache_data
-def load_config():
-    with open(CONFIG_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+TARGET = "DEATH_EVENT"          # 0 = hidup, 1 = meninggal
+RANDOM_SEED = 42
 
+# Urutan fitur sama dengan FEATURE_NAMES di notebook.
+ALL_FEATURES = [
+    "age",
+    "anaemia",
+    "creatinine_phosphokinase",
+    "diabetes",
+    "ejection_fraction",
+    "high_blood_pressure",
+    "platelets",
+    "serum_creatinine",
+    "serum_sodium",
+    "sex",
+    "smoking",
+]
 
-@st.cache_data
-def load_features():
-    with open(FEATURES_PATH, "r", encoding="utf-8") as f:
-        return json.load(f)
+MODES = {
+    # Jalur "TabPFN V2 + SHAP" -> konfigurasi final: 5_Fold, ICB=ON, n_estimators=1,
+    # K terbaik = Top-3 (ejection_fraction, serum_creatinine, age).
+    "selected": {
+        "title": "Fitur Terpilih dengan Model TabPFN V2 + SHAP",
+        "features": ["ejection_fraction", "serum_creatinine", "age"],
+        "n_estimators": 1,
+        "balance_probabilities": True,
+    },
+    # Jalur "TabPFN V2" (tanpa SHAP, seluruh fitur) -> konfigurasi final:
+    # 3_Fold, ICB=ON, n_estimators=8.
+    "full": {
+        "title": "Seluruh Fitur dengan Model TabPFN V2",
+        "features": ALL_FEATURES,
+        "n_estimators": 8,
+        "balance_probabilities": True,
+    },
+}
+
+# ---------------------------------------------------------------------------
+# Data
+# ---------------------------------------------------------------------------
 
 
 @st.cache_data
 def load_training_data():
     df = pd.read_csv(DATA_PATH)
+    missing = [c for c in ALL_FEATURES + [TARGET] if c not in df.columns]
+    if missing:
+        raise ValueError(f"Kolom tidak ditemukan pada dataset: {missing}")
     return df
 
 
-CONFIG = load_config()
-FEATURES = load_features()
 TRAIN_DF = load_training_data()
-TARGET = CONFIG["target"]
 
 # ---------------------------------------------------------------------------
-# TabPFN client
+# Model (TabPFN V2 lokal)
 # ---------------------------------------------------------------------------
 
-def configure_tabpfn_token():
-    """Use a Hugging Face Space Secret if available."""
-    token = (
-        os.getenv("TABPFN_TOKEN")
-        or os.getenv("PRIORLABS_API_KEY")
-        or os.getenv("TABPFN_API_KEY")
-    )
-    if token:
-        try:
-            import tabpfn_client
-            tabpfn_client.set_access_token(token)
-        except Exception:
-            pass
 
 @st.cache_resource(show_spinner=False)
-def build_fitted_model():
+def get_model(mode_key):
     """
-    Recreate the deployment classifier from model_config.json and fit it on
-    the complete deployment training set.
+    Buat TabPFN V2 sesuai notebook, lalu fit pada seluruh data deployment.
 
-    The project is pinned to TabPFN V2. The current tabpfn-client exposes
-    V2 through create_default_for_version(). The config's n_estimators and
-    class-probability balancing are applied here.
-
-    Note:
-    fit_mode='fit_preprocessors' exists in the project configuration, but
-    current tabpfn-client exposes the hosted estimator configuration rather
-    than the local OSS fit_mode parameter. Therefore it is not passed as an
-    unsupported constructor argument.
+    Notebook: TabPFNClassifier.create_default_for_version(
+        ModelVersion.V2, n_estimators=..., balance_probabilities=...)
+    `fit_mode` tidak diubah (default paket = 'fit_preprocessors',
+    sama dengan nilai lama pada notebook).
     """
-    configure_tabpfn_token()
+    from tabpfn import TabPFNClassifier
+    from tabpfn.constants import ModelVersion
 
-    from tabpfn_client import TabPFNClassifier
-    from tabpfn_client.api_models import ModelVersion
-
+    cfg = MODES[mode_key]
     model = TabPFNClassifier.create_default_for_version(
         ModelVersion.V2,
-        n_estimators=int(CONFIG.get("n_estimators", 4)),
-        balance_probabilities=bool(
-            CONFIG.get("internal_class_balancing", False)
-        ),
-        # The deployment configuration indicates that softmax temperature
-        # adjustment is disabled. 1.0 therefore means no temperature effect.
-        softmax_temperature=1.0,
-        average_before_softmax=bool(
-            CONFIG.get("average_before_softmax", False)
-        ),
+        n_estimators=int(cfg["n_estimators"]),
+        balance_probabilities=bool(cfg["balance_probabilities"]),
     )
-
-    X_train = TRAIN_DF[FEATURES].copy()
-    y_train = TRAIN_DF[TARGET].copy()
-
-    model.fit(
-        X_train,
-        y_train,
-        description="Heart Failure Survival Prediction - deployment training set",
-    )
+    X_train = TRAIN_DF[cfg["features"]].to_numpy(dtype=float)
+    y_train = TRAIN_DF[TARGET].astype(int).to_numpy()
+    model.fit(X_train, y_train)
     return model
 
 
+def run_prediction(mode_key, values):
+    model = get_model(mode_key)
+    x = np.asarray([values], dtype=float)
+    proba = np.asarray(model.predict_proba(x))[0]
+    pred = int(np.asarray(model.predict(x))[0])
+    by_class = {int(c): float(p) for c, p in zip(model.classes_, proba)}
+    return {
+        "prediction": pred,
+        "survival_prob": by_class.get(0, 0.0),
+        "death_prob": by_class.get(1, 0.0),
+    }
+
+
 # ---------------------------------------------------------------------------
-# UI helpers
+# Label dan input
 # ---------------------------------------------------------------------------
 
 FEATURE_LABELS = {
@@ -136,37 +156,24 @@ BINARY_OPTIONS = {
 }
 
 
-def numeric_default(feature):
-    value = float(TRAIN_DF[feature].median())
-    return value
-
-
 def number_input_for(feature, key):
     series = TRAIN_DF[feature]
-    minimum = float(series.min())
-    maximum = float(series.max())
-    default = numeric_default(feature)
+    minimum, maximum = float(series.min()), float(series.max())
+    default = float(series.median())
 
-    # Keep inputs within the empirical training-data range to avoid silently
-    # extrapolating far outside the deployment data distribution.
-    if feature in {"age", "ejection_fraction", "serum_sodium"}:
-        step = 1.0
-        fmt = "%.0f"
-    elif feature == "serum_creatinine":
-        step = 0.1
-        fmt = "%.1f"
+    # Input dibatasi pada rentang data training agar model tidak mengekstrapolasi.
+    if feature == "serum_creatinine":
+        step, fmt = 0.1, "%.1f"
     elif feature == "platelets":
-        step = 1000.0
-        fmt = "%.0f"
+        step, fmt = 1000.0, "%.0f"
     else:
-        step = 1.0
-        fmt = "%.0f"
+        step, fmt = 1.0, "%.0f"
 
     return st.number_input(
         FEATURE_LABELS[feature],
         min_value=minimum,
         max_value=maximum,
-        value=default,
+        value=min(max(default, minimum), maximum),
         step=step,
         format=fmt,
         key=key,
@@ -174,13 +181,19 @@ def number_input_for(feature, key):
 
 
 def binary_input_for(feature, key):
-    options = list(BINARY_OPTIONS[feature].keys())
     selected = st.selectbox(
         FEATURE_LABELS[feature],
-        options=options,
+        options=list(BINARY_OPTIONS[feature].keys()),
         key=key,
     )
     return BINARY_OPTIONS[feature][selected]
+
+
+def input_for(mode_key, feature):
+    key = f"{mode_key}_{feature}"
+    if feature in BINARY_OPTIONS:
+        return binary_input_for(feature, key)
+    return number_input_for(feature, key)
 
 
 # ---------------------------------------------------------------------------
@@ -255,6 +268,7 @@ st.markdown(
         box-shadow: 0 3px 8px rgba(0,0,0,0.10);
         margin: 0.8rem auto 1.5rem auto;
         max-width: 700px;
+        color: #111111;
     }
 
     .result-label {
@@ -263,43 +277,18 @@ st.markdown(
         color: #111111;
     }
 
-    .survival {
-        color: #00c853;
-        font-weight: 800;
-    }
-
-    .death {
-        color: #d32f2f;
-        font-weight: 800;
-    }
+    .survival { color: #00c853; font-weight: 800; }
+    .death { color: #d32f2f; font-weight: 800; }
 
     .probability-label {
         margin-top: 0.8rem;
         font-size: 1rem;
         font-weight: 600;
-    }
-
-    .small-note {
-        text-align: center;
-        color: #666666;
-        font-size: 0.84rem;
-        margin-top: 0.2rem;
-    }
-
-    .disclaimer {
-        margin-top: 1.5rem;
-        padding: 0.8rem 1rem;
-        border-radius: 10px;
-        background: #f6f6f6;
-        color: #555555;
-        font-size: 0.8rem;
-        text-align: center;
+        color: #111111;
     }
 
     @media (max-width: 900px) {
-        .main-title {
-            font-size: 1.45rem;
-        }
+        .main-title { font-size: 1.45rem; }
     }
     </style>
     """,
@@ -307,129 +296,145 @@ st.markdown(
 )
 
 # ---------------------------------------------------------------------------
-# Page
+# Komponen halaman
 # ---------------------------------------------------------------------------
 
-st.markdown(
-    '<div class="main-title">Prediksi Kelangsungan Hidup Pasien Gagal Jantung<br>'
-    'Model TabPFN V2</div>',
-    unsafe_allow_html=True,
-)
 
-# The three-column layout follows the supplied wireframe.
-left, middle, right = st.columns(3, gap="large")
+def render_inputs(mode_key):
+    """Tata letak 3 kolom. Mengembalikan nilai sesuai urutan MODES[mode_key]['features']."""
+    feats = MODES[mode_key]["features"]
+    collected = {}
 
-with left:
-    age = number_input_for("age", "age")
-    anaemia = binary_input_for("anaemia", "anaemia")
-    cpk = number_input_for("creatinine_phosphokinase", "cpk")
-    diabetes = binary_input_for("diabetes", "diabetes")
+    if mode_key == "selected":
+        cols = st.columns(len(feats), gap="large")
+        for col, feat in zip(cols, feats):
+            with col:
+                collected[feat] = input_for(mode_key, feat)
+    else:
+        left, middle, right = st.columns(3, gap="large")
+        layout = [
+            (left, ["age", "anaemia", "creatinine_phosphokinase", "diabetes"]),
+            (middle, ["ejection_fraction", "high_blood_pressure", "platelets", "serum_creatinine"]),
+            (right, ["serum_sodium", "sex", "smoking"]),
+        ]
+        for col, group in layout:
+            with col:
+                for feat in group:
+                    collected[feat] = input_for(mode_key, feat)
 
-with middle:
-    ejection_fraction = number_input_for("ejection_fraction", "ejection_fraction")
-    high_bp = binary_input_for("high_blood_pressure", "high_bp")
-    platelets = number_input_for("platelets", "platelets")
-    serum_creatinine = number_input_for("serum_creatinine", "serum_creatinine")
+    return tuple(float(collected[f]) for f in feats)
 
-with right:
-    serum_sodium = number_input_for("serum_sodium", "serum_sodium")
-    sex = binary_input_for("sex", "sex")
-    smoking = binary_input_for("smoking", "smoking")
 
-st.markdown("<div style='height:0.2rem'></div>", unsafe_allow_html=True)
+def render_result(result):
+    pred = result["prediction"]
+    text = "Meninggal" if pred == 1 else "Hidup"
+    css = "death" if pred == 1 else "survival"
 
-_, button_col, _ = st.columns([1.2, 1.0, 1.2])
-with button_col:
-    predict_clicked = st.button("Mulai Prediksi", type="primary")
-
-if predict_clicked:
-    patient = pd.DataFrame(
-        [[
-            age,
-            anaemia,
-            cpk,
-            diabetes,
-            ejection_fraction,
-            high_bp,
-            platelets,
-            serum_creatinine,
-            serum_sodium,
-            sex,
-            smoking,
-        ]],
-        columns=FEATURES,
+    st.markdown('<div class="section-title">Hasil Prediksi</div>', unsafe_allow_html=True)
+    st.markdown(
+        f"""
+        <div class="result-card">
+            <div class="result-label">Kelangsungan Hidup Pasien Terdeteksi:</div>
+            <div style="font-size:1.45rem; margin-top:0.35rem;">
+                <span class="{css}">{text}</span>
+            </div>
+            <div class="probability-label">Dengan Probabilitas Model:</div>
+            <div>Probabilitas Hidup:
+                <span class="survival"><b>{result['survival_prob']:.1%}</b></span></div>
+            <div>Probabilitas Meninggal:
+                <span class="death"><b>{result['death_prob']:.1%}</b></span></div>
+        </div>
+        """,
+        unsafe_allow_html=True,
     )
 
+
+def render_page(mode_key):
+    cfg = MODES[mode_key]
+    st.markdown(
+        '<div class="main-title">Prediksi Kelangsungan Hidup Pasien Gagal Jantung<br>'
+        f'{cfg["title"]}</div>',
+        unsafe_allow_html=True,
+    )
+
+    # Siapkan model saat halaman dibuka agar tombol prediksi langsung responsif.
     try:
-        with st.spinner("Memuat dan menjalankan model TabPFN V2..."):
-            model = build_fitted_model()
-            probabilities = np.asarray(model.predict_proba(patient))[0]
-            prediction = np.asarray(model.predict(patient))[0]
-
-        # The training data uses DEATH_EVENT=0 for survival and =1 for death.
-        prob_by_class = {
-            int(cls): float(prob)
-            for cls, prob in zip(model.classes_, probabilities)
-        }
-        survival_prob = prob_by_class.get(0, 0.0)
-        death_prob = prob_by_class.get(1, 0.0)
-
-        prediction_text = "Meninggal" if int(prediction) == 1 else "Hidup"
-        prediction_class = "death" if int(prediction) == 1 else "survival"
-
-        st.markdown(
-            '<div class="section-title">Hasil Prediksi</div>',
-            unsafe_allow_html=True,
-        )
-
-        st.markdown(
-            f"""
-            <div class="result-card">
-                <div class="result-label">
-                    Kelangsungan Hidup Pasien Terdeteksi:
-                </div>
-                <div style="font-size:1.45rem; margin-top:0.35rem;">
-                    <span class="{prediction_class}">{prediction_text}</span>
-                </div>
-                <div class="probability-label" style="color: black;">Dengan Probabilitas Model:</div>
-                <div style="color: black;">
-                    Probabilitas Hidup:
-                    <span class="survival"><b>{survival_prob:.0%}</b></span>
-                </div>
-                <div style="color: black;">
-                    Probabilitas Meninggal:
-                    <span class="death"><b>{death_prob:.0%}</b></span>
-                </div>
-            </div>
-            """,
-            unsafe_allow_html=True,
-        )
-
-        st.session_state["last_prediction"] = {
-            "prediction": prediction_text,
-            "survival_prob": survival_prob,
-            "death_prob": death_prob,
-        }
-
+        with st.spinner("Menyiapkan model TabPFN V2..."):
+            get_model(mode_key)
     except Exception as exc:
         st.error(
-            "Prediksi gagal dijalankan. Pastikan Secret token TabPFN sudah "
-            "dikonfigurasi pada Hugging Face Space dan dependency berhasil "
-            "terpasang."
+            "Model gagal dimuat. Pastikan paket `tabpfn` dan `torch` terpasang, "
+            "serta server dapat mengunduh bobot TabPFN V2 dari Hugging Face."
         )
         st.exception(exc)
+        st.stop()
+
+    values = render_inputs(mode_key)
+
+    st.markdown("<div style='height:0.2rem'></div>", unsafe_allow_html=True)
+    _, button_col, _ = st.columns([1.2, 1.0, 1.2])
+    with button_col:
+        clicked = st.button("Mulai Prediksi", type="primary", key=f"{mode_key}_predict")
+
+    state_key = f"result_{mode_key}"
+
+    if clicked:
+        try:
+            with st.spinner("Menjalankan prediksi..."):
+                result = run_prediction(mode_key, values)
+            result["inputs"] = values
+            st.session_state[state_key] = result
+        except Exception as exc:
+            st.session_state.pop(state_key, None)
+            st.error("Prediksi gagal dijalankan.")
+            st.exception(exc)
+
+    saved = st.session_state.get(state_key)
+    if saved is not None:
+        if tuple(saved["inputs"]) != tuple(values):
+            st.info("Input telah berubah. Tekan “Mulai Prediksi” untuk memperbarui hasil.")
+        render_result(saved)
+
+    st.markdown(
+        """
+        <div style="background-color: #fff3cd; border-left: 5px solid #ff6b6b; border-radius: 5px; padding: 20px; margin-top: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
+            <h3 style="color: #d32f2f; margin-top: 0;">⚠️ DISCLAIMER PENTING</h3>
+            <p style="color: #333; font-weight: 500; line-height: 1.6;">
+                Aplikasi ini merupakan <strong>prototipe penelitian</strong> untuk prediksi berbasis
+                data dan <strong>BUKAN pengganti</strong> diagnosis, keputusan klinis, atau konsultasi
+                tenaga kesehatan.
+            </p>
+        </div>
+        """,
+        unsafe_allow_html=True,
+    )
 
 
-st.markdown(
-    """
-    <div class="disclaimer" style="background-color: #fff3cd; border-left: 5px solid #ff6b6b; border-radius: 5px; padding: 20px; margin-top: 20px; box-shadow: 0 2px 8px rgba(0,0,0,0.1);">
-        <h3 style="color: #d32f2f; margin-top: 0;">⚠️ DISCLAIMER PENTING</h3>
-        <p style="color: #333; font-weight: 500; line-height: 1.6;">
-            Aplikasi ini merupakan <strong>prototipe penelitian</strong> untuk prediksi berbasis
-            data dan <strong>BUKAN pengganti</strong> diagnosis, keputusan klinis, atau konsultasi
-            tenaga kesehatan.
-        </p>
-    </div>
-    """,
-    unsafe_allow_html=True,
-)
+def page_selected():
+    render_page("selected")
+
+
+def page_full():
+    render_page("full")
+
+
+# ---------------------------------------------------------------------------
+# Navigasi: halaman utama = 3 fitur terpilih, sub menu = 11 fitur
+# ---------------------------------------------------------------------------
+
+pages = [
+    st.Page(
+        page_selected,
+        title="Prediksi 3 Fitur Terpilih",
+        icon="🎯",
+        url_path="fitur-terpilih",
+        default=True,
+    ),
+    st.Page(
+        page_full,
+        title="Prediksi Seluruh Fitur (11)",
+        icon="🧬",
+        url_path="seluruh-fitur",
+    ),
+]
+st.navigation(pages).run()
